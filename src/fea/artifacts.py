@@ -1,11 +1,15 @@
 """Artefact parsers: registry, event logs, SQLite, LNK, Prefetch, ESE databases, EXIF, hashes, file type, YARA."""
 from __future__ import annotations
-import json, re, sqlite3, subprocess
+
+import json
+import re
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
 from . import config
-from .images import handle, sha1_file, run
+from .images import handle, run, sha1_file
 
 
 def _source(image: str | None, part: int | None, ref: str | None, local_path: str | None) -> tuple[Path, dict, ZoneInfo]:
@@ -66,8 +70,8 @@ def registry_key(image: str | None, part: int | None, ref: str | None, key: str 
 
 def registry_plugins(image: str | None, part: int | None, ref: str | None, plugins: list[str] | None = None, local_path: str | None = None) -> dict:
     """Run regipy plugins (e.g. user_assist, shellbags_ntuser, word_wheel_query, typed_paths, usbstor_plugin, services, computer_name, timezone_data, ...)."""
-    from regipy.registry import RegistryHive
     from regipy.plugins.utils import run_relevant_plugins
+    from regipy.registry import RegistryHive
     p, ev, tz = _source(image, part, ref, local_path)
     hive = RegistryHive(str(p))
     res = run_relevant_plugins(hive, as_json=True, plugins=plugins) if plugins else run_relevant_plugins(hive, as_json=True)
@@ -179,7 +183,6 @@ def lnk(image: str | None, part: int | None, ref: str | None, local_path: str | 
     import pylnk
     p, ev, tz = _source(image, part, ref, local_path)
     f = pylnk.file(); f.open(str(p))
-    g = lambda n: (getattr(f, n, None) if not callable(getattr(f, n, None)) else None)
     d = {"local_path": f.get_local_path(), "network_path": f.get_network_path(), "relative_path": f.get_relative_path(), "working_directory": f.get_working_directory(),
          "arguments": f.get_command_line_arguments(), "description": f.get_description(), "volume_label": f.get_volume_label(),
          "drive_serial": f"{f.get_drive_serial_number():08X}" if f.get_drive_serial_number() is not None else None, "drive_type": f.get_drive_type(),
@@ -269,7 +272,7 @@ def _exif_pure(p: Path):
     import zipfile
     lim = ["exiftool not installed: only EXIF/PNG text (Pillow) and OOXML properties are read"]
     try:
-        from PIL import Image, ExifTags
+        from PIL import ExifTags, Image
         with Image.open(p) as im:
             d = {"Format": im.format, "ImageSize": f"{im.width}x{im.height}", "Mode": im.mode}
             ex = im.getexif()

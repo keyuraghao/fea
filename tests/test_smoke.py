@@ -1,5 +1,8 @@
 """Smoke tests that run against a registered image when one is available (skip otherwise)."""
-import os, pytest
+import os
+
+import pytest
+
 from fea import config, fs, search
 
 IMG = os.environ.get("FEA_TEST_IMAGE")

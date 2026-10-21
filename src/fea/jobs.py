@@ -1,6 +1,10 @@
 """Background jobs for long-running scans (unallocated grep, content grep, recovery)."""
 from __future__ import annotations
-import threading, time, traceback, uuid
+
+import threading
+import time
+import traceback
+import uuid
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()

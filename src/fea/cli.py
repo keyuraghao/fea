@@ -1,8 +1,12 @@
 """fea command line: the same operations as the MCP tools, printed as text or --json."""
 from __future__ import annotations
-import json, sys
+
+import json
+
 import click
-from . import config, fs, search, artifacts, setup as setup_mod
+
+from . import artifacts, config, fs, search
+from . import setup as setup_mod
 from .images import handle
 
 

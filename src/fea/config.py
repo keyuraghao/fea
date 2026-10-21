@@ -1,7 +1,10 @@
 """Image registry and settings: ~/.fea/images.toml (override with FEA_HOME)."""
 from __future__ import annotations
-import os, tomllib
+
+import os
+import tomllib
 from pathlib import Path
+
 import tomli_w
 
 HOME = Path(os.environ.get("FEA_HOME", Path.home() / ".fea"))

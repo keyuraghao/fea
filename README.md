@@ -1,118 +1,103 @@
-# FEA - Forensic Evidence Agent
+<p align="center">
+  <img src="docs/assets/fea-flow.svg" alt="FEA investigation flow" width="720">
+</p>
 
-One MCP server (and CLI) for disk-image forensics, in the spirit of [REA](https://github.com/morluto/rea) for reverse engineering: it lets an AI agent such as Claude Code open forensic disk images read-only and answer questions about them with evidence attached to every result.
+<h1 align="center">FEA</h1>
+<p align="center"><b>One MCP for digital forensics across disk images, file systems and artefacts.</b></p>
 
-Runs on **Windows, macOS and Linux** with nothing but Python 3.12+ (every dependency ships binary wheels for all three). The native sleuthkit and exiftool binaries are optional accelerators, never requirements.
+<p align="center">
+  <a href="https://github.com/keyuraghao/fea/actions/workflows/ci.yml"><img src="https://github.com/keyuraghao/fea/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+">
+  <img src="https://img.shields.io/badge/platform-windows%20%7C%20macos%20%7C%20linux-lightgrey" alt="Platforms">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT"></a>
+</p>
 
-Targets: raw and split-raw images (`.001`, `.002`, ...) and E01 (via The Sleuth Kit library), with NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, UFS, ISO9660 and YAFFS2 file systems. Windows, Linux and Android artefacts are parsed in place; nothing is mounted and nothing from the image is ever executed.
+FEA (Forensic Evidence Agent) lets an AI agent such as Claude Code examine forensic disk images the way an examiner does: list and recover files, read registry hives and event logs, query SQLite and ESE databases, parse prefetch and shortcuts, sweep unallocated space, and build timelines. Everything is read-only, runs locally, and every answer comes back with the evidence behind it (image, partition, path, inode, hash, tool) and its limitations.
 
-## Install
+It is the forensic counterpart of [REA](https://github.com/morluto/rea), which does the same for reverse engineering.
 
-With [uv](https://docs.astral.sh/uv/) (recommended, any OS):
+## Targets
 
-```bash
-git clone https://github.com/<you>/fea && cd fea
-uv sync
-uv run fea setup        # registers the MCP server with Claude Code (user scope) and installs the /fea skill
-uv run fea doctor       # shows platform, Python and which optional native tools were found
-```
-
-With plain pip (any OS):
-
-```bash
-python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install -e .
-python -m fea setup
-```
-
-Optional accelerators, picked up automatically when on PATH (or in `tool_dirs` of `~/.fea/images.toml`, or `FEA_TOOL_DIRS`): `sleuthkit` (fls, istat, blkls, blkcalc, tsk_recover), `exiftool`. On Windows the default install folders under `C:\Program Files` are searched too. Set `FEA_NO_NATIVE=1` to force the pure-Python paths.
-
-Register images once (paths are stored in `~/.fea/images.toml`, `%USERPROFILE%\.fea` on Windows):
-
-```bash
-uv run fea images add E4 /cases/ambrosia/jeanhassan.001 --label "Jeanette Hassan desktop"
-uv run fea images tz America/New_York     # default reporting timezone (UTC is always given too)
-```
-
-## MCP tools (34)
-
-| Area | Tools |
-|---|---|
-| Images | `images_list`, `images_add`, `partitions`, `tools_status` |
-| File system | `ls`, `stat` (NTFS $FILE_NAME times with a timestomp indicator, ADS), `read`, `extract`, `find` (names incl. deleted), `timeline`, `recover_deleted` |
-| Search | `grep_files` (content, UTF-8 + UTF-16LE), `grep_unallocated` (NTFS bitmap walk or blkls), `grep_file`, `strings`, `disk_read`, `block_read`, `blkcalc` |
-| Windows | `registry_key`, `registry_plugins` (UserAssist, ShellBags, WordWheelQuery, TypedPaths, USBSTOR, services...), `evtx`, `prefetch`, `lnk`, `esedb_tables`, `esedb_dump` (SRUM, Windows.edb, WebCache, ntds.dit) |
-| Any file | `sqlite_tables`, `sqlite_query` (read-only; WAL applied), `exif`, `file_info` (hashes, entropy, trailing data after JPEG/PNG/PDF end), `office_parts` (hidden text, tracked changes, comments), `yara_scan` |
-| Jobs | `job_status`, `job_result`, `jobs_list` for the long scans |
-
-Every result carries an `evidence` block (image, partition, path, inode, SHA1 of the extracted copy, tool) and, where it matters, `limitations`. Times are returned in UTC and in the image's configured timezone.
-
-## CLI
-
-The same operations from the shell, with `--json` for machine output:
-
-```bash
-fea parts E4
-fea ls E4 /Users/jean.AMBROSIA/Downloads
-fea stat E4 inode:237
-fea find E4 '*.lnk' --deleted only --since 2021-02-01
-fea timeline E4 --start 2021-02-03T12:30 --end 2021-02-03T12:40 --path Prefetch
-fea cat E4 /Windows/System32/drivers/etc/hosts
-fea extract E4 /Windows/System32/config/SYSTEM ./out
-fea reg E4 /Windows/System32/config/SYSTEM --key 'ControlSet001\Control\ComputerName\ComputerName'
-fea regplugins E4 /Users/jean.AMBROSIA/NTUSER.DAT --plugin user_assist
-fea evtx E4 /Windows/System32/winevt/Logs/Security.evtx --ids 1102,4624 --start 2021-02-03
-fea prefetch E4 /Windows/Prefetch/UPDATE2.EXE-7783C67A.pf
-fea sqlite E4 '/Users/jean.AMBROSIA/.../plum.sqlite' --sql 'select Text from Note'
-fea grep E4 192.168.2.42 FROGMAN --path 'Users/.*'       # file content
-fea grep E4 FROGMAN --unallocated                         # deleted / unallocated space
-fea strings E4 /pagefile.sys --pattern 'trillian|mattermost'
-```
-
-(`uv run fea ...` when using uv without activating the environment; `python -m fea ...` works everywhere.)
-
-## How an agent uses it
-
-1. `images_list` -> `partitions` (omit `part` to use the largest file system).
-2. `find` / `ls` / `timeline` to locate; `stat` / `read` / `extract` to inspect.
-3. Artefact tools take an in-image `ref` (path or `inode:N`) or a `local_path` for something already extracted.
-4. Long scans return a `job_id`; call `job_result(job_id, wait_s=30)` until `status` is `done`.
-5. Cite the `evidence` block with every conclusion and keep the `limitations`.
-
-## Portability notes
-
-| Capability | Pure Python (default everywhere) | With native tool present |
+| Target | What FEA does with it | Backed by |
 |---|---|---|
-| Directory walk for find/timeline | pytsk3 recursive walk (deleted names and orphans included) | `fls -r -m` (faster, adds $FILE_NAME rows) |
-| NTFS $FILE_NAME times | parsed from the raw attribute | plus `istat` text |
-| Unallocated search | NTFS `$Bitmap` walk, real block numbers in hits; other file systems scan the whole volume (flagged) | `blkls` stream + `blkcalc` |
-| Deleted-file recovery | deleted-entry walk | `tsk_recover -e` |
-| strings | regex over bytes (ASCII + UTF-16LE) | - |
-| File typing | puremagic | `file` |
-| Metadata | Pillow EXIF + OOXML properties | `exiftool` (everything) |
+| Raw, split raw (`.001`...) and E01 images | partition table, file-system probing, raw and block reads | The Sleuth Kit (pytsk3) |
+| NTFS, FAT/exFAT, ext2/3/4, HFS+, APFS, UFS, ISO9660, YAFFS2 | list, find (incl. deleted names), stat with NTFS `$FILE_NAME` times and alternate data streams, read, extract, timeline, recover deleted | pytsk3; `fls`/`tsk_recover` when installed |
+| Unallocated space | keyword search (UTF-8 and UTF-16LE), block mapping, block reads | NTFS `$Bitmap` walk; `blkls`/`blkcalc` when installed |
+| Windows registry | key/value dumps with last-write times; UserAssist, ShellBags, WordWheelQuery, TypedPaths, USBSTOR, services, timezone and more | regipy |
+| Windows event logs (`.evtx`) | filter by event ID, time, provider or text; flattened event data | evtx (Rust parser) |
+| Prefetch, LNK and Jump List entries | run counts and times, target paths, volume serials, machine IDs | libscca, liblnk |
+| ESE databases (SRUM, Windows Search, WebCache, ntds.dit) | table listing and row dumps | dissect.esedb |
+| SQLite (browsers, chat apps, Android) | schema, read-only SQL, WAL applied, freelist size | sqlite3 |
+| Pictures, documents, PDFs | metadata, hashes, entropy, bytes after the end-of-file marker, OOXML hidden text and tracked changes, YARA | exiftool or Pillow, puremagic, yara-python |
+| Memory remnants on disk (pagefile, hiberfil, swap) | strings and keyword hits with offsets | pure Python |
 
-## Layout
+Linux and Android file systems are handled by the same file-system tools; Android app databases go through the SQLite tools.
+
+## Quick start
+
+```bash
+git clone https://github.com/keyuraghao/fea && cd fea
+uv sync                                   # or: pip install -e .
+uv run fea setup                          # registers the MCP server with Claude Code and installs the /fea skill
+uv run fea images add E4 /cases/x/disk.001 --label "Workstation of J. Hassan"
+```
+
+Then ask Claude Code something like *"on E4, who cleared the Security log and what ran in the ten minutes before?"* and it will call the FEA tools itself. From the shell the same operations are one command each:
+
+```bash
+fea evtx E4 /Windows/System32/winevt/Logs/Security.evtx --ids 1102
+fea timeline E4 --start 2021-02-03T12:24 --end 2021-02-03T12:34 --path Prefetch
+fea prefetch E4 /Windows/Prefetch/UPDATE2.EXE-7783C67A.pf
+```
+
+Requirements: Python 3.12+ on Windows, macOS or Linux. Nothing else. The Sleuth Kit and exiftool binaries are optional accelerators and are used automatically when found (`fea doctor` shows what was detected).
+
+## How an investigation flows
+
+1. **Scope**: `images_list`, `partitions`, `tools_status`.
+2. **Locate**: `find` (names, including deleted), `ls`, `timeline`.
+3. **Inspect**: `stat` (timestomp indicator from `$FILE_NAME`), `read`, `extract`, `file_info`.
+4. **Parse in place**: registry, event logs, prefetch, LNK, ESE, SQLite, EXIF, OOXML, YARA.
+5. **Dig**: `grep_files`, `grep_file` on pagefile/hiberfil, `grep_unallocated`, `recover_deleted`, `block_read`.
+6. **Report**: every result carries `evidence` and `limitations`; times are given in UTC and the image's timezone.
+
+Long scans run as background jobs (`job_result(job_id, wait_s=30)`), so the agent can keep working.
+
+## Showcase
+
+Findings reproduced with FEA on a ten-image training case (a government leak investigation):
+
+- **Who cleared the logs.** `evtx` on `Security.evtx` returned the single surviving record: event 1102, log cleared by the local account `jean` at 12:34:08 local time; `timeline` on the Prefetch folder showed the implant runs in the preceding minutes; `prefetch` gave the five run times of `update2.exe`.
+- **What the implant talked to.** `grep_file` on the implant found `tcp://192.168.2.42:5555` stored as UTF-16LE at offset 205,372.
+- **What the user was told to do.** `sqlite_query` on the Sticky Notes database, with its write-ahead log applied, returned the note "install new software with the .\jean" that explains the passwordless local account.
+- **Hidden appended data.** `file_info` on every picture reported `bytes_after_eof: 0`, closing a steganography question in one call per file.
+
+## Agent integration
+
+`fea setup` registers the server for Claude Code (user scope) and writes the `/fea` skill. For any other MCP client, point it at:
 
 ```
-src/fea/config.py     image registry (~/.fea/images.toml), cache dir
-src/fea/images.py     pytsk3 image/partition/file access, time conversion, $FILE_NAME parsing, evidence blocks
-src/fea/tools.py      optional native tool lookup, pure-Python strings and file typing
-src/fea/fs.py         ls, stat, read, extract, find, timeline, recover_deleted
-src/fea/search.py     grep over files / unallocated / single file, strings, raw and block reads, blkcalc
-src/fea/artifacts.py  registry, evtx, sqlite, lnk, prefetch, esedb, exif, file_info, office, yara
-src/fea/jobs.py       background jobs
-src/fea/server.py     MCP server (mcp.server.mcpserver.MCPServer, stdio by default)
-src/fea/cli.py        click CLI
-src/fea/setup.py      claude mcp add + skill install (Windows/macOS/Linux)
+uv --directory /path/to/fea run fea mcp          # or: python -m fea mcp
 ```
+
+The server speaks stdio by default (`--transport sse|streamable-http` also available).
+
+## Documentation
+
+- [Installation](docs/installation.md): uv, pip, Windows notes, optional native tools
+- [CLI reference](docs/cli.md)
+- [MCP contract](docs/mcp.md): every tool, its parameters and result shape (generated from the server)
+- [Targets](docs/targets.md): per-artefact guides and the Windows/Linux/Android checklists
+- [Evidence contract](docs/evidence.md): what the `evidence` and `limitations` blocks promise
+- [Contributing](CONTRIBUTING.md), [Security and evidence handling](SECURITY.md), [Changelog](CHANGELOG.md)
 
 ## Limits
 
-- The Sleuth Kit does not parse HPFS or some exotic file systems; use `disk_read` / `strings` on those.
+- The Sleuth Kit does not parse HPFS or some exotic file systems; use `disk_read` and `strings` there.
 - Volume shadow copies, BitLocker and encrypted containers are not opened.
 - Registry transaction logs are not replayed.
-- In pure-Python mode `grep_unallocated` on non-NTFS volumes scans allocated blocks as well; the result says so.
+- Without sleuthkit, `grep_unallocated` on non-NTFS volumes scans allocated blocks too (the result says so).
 
 ## License
 
-MIT.
+MIT. Third-party libraries keep their own licences: The Sleuth Kit (IBM Public License / CPL), regipy (MIT), evtx (MIT/Apache-2.0), libyal libraries (LGPL), dissect (AGPL-3.0 for dissect.esedb), yara-python (BSD/Apache-2.0). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

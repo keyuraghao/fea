@@ -1,9 +1,12 @@
 """FEA MCP server: one MCP for disk-image forensics (sleuthkit, registry, event logs, SQLite, artefact parsers).
 Every tool returns a dict with the data, an `evidence` block (image, partition, path/inode, tool, hashes) and, where relevant, `limitations`."""
 from __future__ import annotations
+
 from typing import Any
+
 from mcp.server.mcpserver import MCPServer
-from . import config, fs, search, artifacts, jobs
+
+from . import artifacts, config, fs, jobs, search
 from .images import handle
 
 INSTRUCTIONS = """FEA exposes forensic disk images to you read-only. Workflow:

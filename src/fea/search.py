@@ -1,10 +1,14 @@
 """Content search: allocated files, unallocated space, single files, raw disk ranges. Pure Python with optional blkls acceleration."""
 from __future__ import annotations
-import re, subprocess
+
+import re
+import subprocess
 from pathlib import Path
+
 import pytsk3
-from .images import handle, run
+
 from .fs import iter_body
+from .images import handle, run
 from .tools import find_tool, iter_strings
 
 ENC = {"utf8": lambda s: s.encode("utf-8"), "utf16le": lambda s: s.encode("utf-16-le"), "latin1": lambda s: s.encode("latin-1", errors="ignore")}

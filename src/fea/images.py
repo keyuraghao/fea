@@ -1,11 +1,16 @@
 """Open images and file systems with The Sleuth Kit (pytsk3); resolve paths and inodes; time helpers."""
 from __future__ import annotations
-import hashlib, os, re, subprocess
+
+import hashlib
+import re
+import subprocess
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
 import pytsk3
+
 from . import config
 
 SECTOR = 512

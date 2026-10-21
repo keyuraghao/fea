@@ -3,6 +3,9 @@ name = "fea"
 version = "0.1.0"
 description = "FEA - Forensic Evidence Agent: one MCP server and CLI for disk-image forensics (Windows, macOS, Linux)"
 readme = "README.md"
+license = "MIT"
+authors = [{ name = "Keyur Aghao", email = "kaghao@andrew.cmu.edu" }]
+keywords = ["forensics", "dfir", "mcp", "sleuthkit", "disk-image", "claude-code", "agent"]
 requires-python = ">=3.12"
 classifiers = ["Operating System :: OS Independent", "Programming Language :: Python :: 3", "Topic :: Security"]
 dependencies = [
@@ -21,6 +24,12 @@ dependencies = [
     "yara-python>=4.5.4",
 ]
 
+[project.urls]
+Homepage = "https://github.com/keyuraghao/fea"
+Repository = "https://github.com/keyuraghao/fea"
+Issues = "https://github.com/keyuraghao/fea/issues"
+Changelog = "https://github.com/keyuraghao/fea/blob/main/CHANGELOG.md"
+
 [project.scripts]
 fea = "fea:main"
 
@@ -31,4 +40,13 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.17.1",
 ]
+
+[tool.ruff]
+line-length = 180
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E402", "E501", "E701", "E702", "E731", "E741"]

@@ -1,7 +1,12 @@
 """Platform helpers: locate optional native tools, pure-Python strings and file typing."""
 from __future__ import annotations
-import os, re, shutil, sys
+
+import os
+import re
+import shutil
+import sys
 from pathlib import Path
+
 from . import config
 
 # Optional accelerators. Everything works without them; when present they are used for speed or extra detail.

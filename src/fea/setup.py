@@ -1,6 +1,11 @@
 """Register the FEA MCP server with Claude Code and install a workflow skill."""
 from __future__ import annotations
-import os, platform, shutil, subprocess, sys
+
+import os
+import platform
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]

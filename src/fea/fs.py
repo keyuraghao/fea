@@ -1,12 +1,16 @@
 """File-system level operations: ls, stat, read, extract, find, timeline, recover.
 Pure Python (pytsk3) throughout; the native sleuthkit binaries are used only as optional accelerators when installed."""
 from __future__ import annotations
-import re, subprocess
+
+import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
+
 import pytsk3
+
 from . import config
-from .images import ImageHandle, handle, meta_dict, run, ntfs_filename_times
+from .images import ImageHandle, handle, meta_dict, ntfs_filename_times, run
 from .tools import find_tool
 
 BODY_FIELDS = ["md5", "name", "inode", "mode", "uid", "gid", "size", "atime", "mtime", "ctime", "crtime"]
@@ -51,7 +55,6 @@ def stat(image: str, part: int | None, ref: str) -> dict:
     fn = ntfs_filename_times(h, f)
     if fn:
         d["filename_attr_times"] = fn
-        si = d.get("mtime"), d.get("crtime")
         if fn.get("crtime") and d.get("crtime") and fn["crtime"]["utc"] > d["crtime"]["utc"]:
             d["timestomp_indicator"] = "$STANDARD_INFORMATION creation time is EARLIER than $FILE_NAME creation time"
     inode = d.get("inode")

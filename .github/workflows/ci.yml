@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: uv sync --group dev
+      - name: Lint
+        run: uv run ruff check src tests scripts
+      - name: Import and CLI
+        env:
+          FEA_NO_NATIVE: "1"
+        run: |
+          uv run fea --help
+          uv run fea doctor
+          uv run python -c "import asyncio, fea.server as s; print(len(asyncio.run(s.mcp.list_tools())), 'tools')"
+      - name: Unit tests
+        run: uv run pytest -q tests

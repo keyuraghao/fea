@@ -18,7 +18,7 @@ List registered disk images (name, path, label, timezone) and the default timezo
 
 ### `images_add`
 
-Register a disk image (raw, split raw .001, E01) under a short name. `path` is the first segment.
+Register a disk image (raw, split raw .001, E01) under a short name. Allowed only for paths under the configured allowed_roots (or with FEA_UNRESTRICTED=1); otherwise register on the host with `fea images add`.
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
@@ -37,7 +37,7 @@ Partition table (mmls-style) with file-system type probing for each partition.
 
 ### `tools_status`
 
-Platform, Python version and which optional native tools (sleuthkit, exiftool) are available; FEA works without them.
+Platform, Python version, optional native tools (sleuthkit, exiftool) and the host access policy in force.
 
 ## File system
 
@@ -55,7 +55,7 @@ List a directory (path or 'inode:N'): names, inodes, sizes, MAC times, deleted f
 
 ### `stat`
 
-Full metadata for a file/dir by path or inode ('inode:N' or 'N-128-3'): times, attributes/ADS, istat output ($FILE_NAME times on NTFS).
+Full metadata for a file/dir by path or inode ('inode:N' or 'N-128-3'): times, attributes/ADS, NTFS $FILE_NAME times with a timestomp indicator, istat text when sleuthkit is installed.
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
@@ -79,13 +79,13 @@ Read up to 4 MiB of a file (or an ADS via `stream`) as text (auto UTF-16 detecti
 
 ### `extract`
 
-Copy a file (or ADS) out of the image into out_dir; returns size, SHA1, MD5.
+Copy a file (or ADS) out of the image into out_dir (relative to, or inside, the output root); returns size, SHA1, MD5.
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
 | `image` | string | yes |  |
 | `ref` | string | yes |  |
-| `out_dir` | string | yes |  |
+| `out_dir` | string |  | `extracted` |
 | `part` | integer | null |  |  |
 | `stream` | string | null |  |  |
 | `name` | string | null |  |  |
@@ -109,7 +109,7 @@ Find files by path name (glob with * ? or regex), including deleted names. delet
 
 ### `timeline`
 
-File-system timeline (fls body) between start/end (ISO, image timezone), optionally filtered by path regex. kinds: m a c b.
+File-system timeline (directory walk) between start/end (ISO, image timezone), optionally filtered by path regex. kinds: m a c b.
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
@@ -124,14 +124,15 @@ File-system timeline (fls body) between start/end (ISO, image timezone), optiona
 
 ### `recover_deleted`
 
-Background job: tsk_recover deleted/unallocated files into out_dir (optionally keep only paths matching regex). Poll job_result.
+Background job: recover deleted/orphaned files into out_dir (inside the output root), optionally only paths matching regex. Poll job_result.
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
 | `image` | string | yes |  |
-| `out_dir` | string | yes |  |
+| `out_dir` | string |  | `recovered` |
 | `part` | integer | null |  |  |
 | `path_regex` | string | null |  |  |
+| `max_files` | integer |  | `20000` |
 
 ## Search
 
@@ -155,7 +156,7 @@ Background job: search file CONTENT (UTF-8 and UTF-16LE) of files whose path mat
 
 ### `grep_unallocated`
 
-Background job: stream unallocated blocks (blkls) and match terms; hits carry blkls offsets (map with blkcalc). Poll job_result.
+Background job: scan unallocated space for terms; hits carry file-system block numbers (or blkls offsets when sleuthkit is used). Poll job_result.
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
@@ -171,7 +172,7 @@ Background job: stream unallocated blocks (blkls) and match terms; hits carry bl
 
 ### `grep_file`
 
-Search one file (in-image ref, or local_path e.g. an extracted pagefile) for terms; returns offsets and context.
+Search one file (in-image ref, or local_path to an extracted file such as pagefile.sys) for terms; returns offsets and context.
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
@@ -214,7 +215,7 @@ Raw bytes at an absolute byte offset in the image (hex dump or text).
 
 ### `block_read`
 
-Read file-system blocks by number (follow up grep_unallocated hits after blkcalc).
+Read file-system blocks by number (follow up grep_unallocated hits).
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
@@ -226,7 +227,7 @@ Read file-system blocks by number (follow up grep_unallocated hits after blkcalc
 
 ### `blkcalc`
 
-Map a blkls stream byte offset (from grep_unallocated) to the real file-system block.
+Map a blkls stream byte offset (from a sleuthkit-mode grep_unallocated hit) to the real file-system block.
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
@@ -238,7 +239,7 @@ Map a blkls stream byte offset (from grep_unallocated) to the real file-system b
 
 ### `registry_key`
 
-Read a Windows registry hive (SYSTEM, SOFTWARE, SAM, NTUSER.DAT, UsrClass.dat, Amcache.hve): a key's values, last-write time and subkeys to `depth`.
+Read a Windows registry hive (SYSTEM, SOFTWARE, SAM, NTUSER.DAT, UsrClass.dat, Amcache.hve): a key's values, last-write time and subkeys to `depth` (max 4).
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
@@ -331,7 +332,7 @@ Dump rows of an ESE database table (optionally selected columns, filtered by tex
 
 ### `sqlite_tables`
 
-Tables, row counts, columns and freelist size of a SQLite database (browser history, chat apps, Android apps).
+Tables, row counts, columns and freelist size of a SQLite database (browser history, chat apps, Android apps). WAL applied when present.
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
@@ -355,7 +356,7 @@ Run a read-only SELECT against a SQLite database inside the image.
 
 ### `exif`
 
-All metadata of a media/document file via exiftool (EXIF, XMP, IPTC, office properties).
+Metadata of a media/document file (exiftool when installed, else Pillow EXIF and OOXML properties).
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
@@ -366,7 +367,7 @@ All metadata of a media/document file via exiftool (EXIF, XMP, IPTC, office prop
 
 ### `file_info`
 
-File type (libmagic), SHA1/MD5/SHA256, entropy, and bytes after the JPEG/PNG/PDF end marker (hidden appended data).
+File type, SHA1/MD5/SHA256, entropy, and bytes after the JPEG/PNG/PDF end marker (hidden appended data).
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
@@ -389,7 +390,7 @@ Open an OOXML document (docx/xlsx/pptx): list parts, extract text, comments, pro
 
 ### `yara_scan`
 
-Scan a file with YARA rules (rule text or path to a .yar file).
+Scan a file with YARA rules (rule text, or a .yar path inside the allowed roots).
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
@@ -411,7 +412,7 @@ Status and progress of a background job.
 
 ### `job_result`
 
-Wait up to wait_s seconds for a background job and return its result when done.
+Wait up to wait_s seconds (max 300) for a background job and return its result when done.
 
 | Parameter | Type | Required | Default |
 |---|---|---|---|
@@ -422,3 +423,6 @@ Wait up to wait_s seconds for a background job and return its result when done.
 
 List background jobs started in this session.
 
+## Other
+
+- `job_cancel`: Ask a running background job to stop at its next progress checkpoint.

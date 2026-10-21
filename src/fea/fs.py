@@ -10,11 +10,13 @@ from pathlib import Path
 import pytsk3
 
 from . import config
-from .images import ImageHandle, handle, meta_dict, ntfs_filename_times, run
+from .images import ImageHandle, handle, meta_dict, ntfs_filename_times, private_handle, run
+from .paths import check_out_dir, safe_name, safe_relpath
 from .tools import find_tool
 
 BODY_FIELDS = ["md5", "name", "inode", "mode", "uid", "gid", "size", "atime", "mtime", "ctime", "crtime"]
 _INODE = re.compile(r"^(inode:)?\d+$")
+MAX_READ = 4 << 20
 
 
 def ls(image: str, part: int | None, path: str = "/", show_deleted: bool = True, limit: int = 500) -> dict:
@@ -30,11 +32,12 @@ def ls(image: str, part: int | None, path: str = "/", show_deleted: bool = True,
         row = meta_dict(h, e, name)
         if not show_deleted and (row.get("name_deleted") or (row.get("inode") is not None and not row.get("allocated", True))):
             continue
-        streams = [a.info.name.decode(errors="replace") for a in h.data_attrs(e) if a.info.name] if row.get("inode") else []
-        if streams:
-            row["ads"] = streams
         n += 1
         if n <= limit:
+            if row.get("inode"):
+                streams = [a.info.name.decode(errors="replace") for a in h.data_attrs(e) if a.info.name]
+                if streams:
+                    row["ads"] = streams
             rows.append(row)
     return {"path": p, "entries": rows, "total": n, "truncated": n > limit, "evidence": h.evidence(part, source=p)}
 
@@ -55,7 +58,8 @@ def stat(image: str, part: int | None, ref: str) -> dict:
     fn = ntfs_filename_times(h, f)
     if fn:
         d["filename_attr_times"] = fn
-        if fn.get("crtime") and d.get("crtime") and fn["crtime"]["utc"] > d["crtime"]["utc"]:
+        si_cr, fn_cr = (d.get("crtime") or {}).get("utc"), (fn.get("crtime") or {}).get("utc")
+        if si_cr and fn_cr and si_cr < fn_cr:
             d["timestomp_indicator"] = "$STANDARD_INFORMATION creation time is EARLIER than $FILE_NAME creation time"
     inode = d.get("inode")
     if inode is not None and find_tool("istat"):
@@ -68,13 +72,9 @@ def stat(image: str, part: int | None, ref: str) -> dict:
 def read(image: str, part: int | None, ref: str, offset: int = 0, length: int = 4096, stream: str | None = None, as_text: bool = True) -> dict:
     h = handle(image)
     f = h.open(part, ref)
-    attr = None
-    if stream:
-        attr = next((a for a in h.data_attrs(f) if (a.info.name or b"").decode(errors="replace") == stream), None)
-        if attr is None:
-            raise FileNotFoundError(f"stream '{stream}' not found")
-    length = min(length, 4 << 20)
-    data = h.read_attr(f, attr, offset, length)
+    attr = h.find_stream(f, stream)
+    length = max(0, min(length, MAX_READ))
+    data = h.read_attr(f, attr, max(0, offset), length)
     total = attr.info.size if attr is not None else (f.info.meta.size if f.info.meta else 0)
     out = {"offset": offset, "returned": len(data), "total_size": total}
     if as_text:
@@ -92,17 +92,18 @@ def read(image: str, part: int | None, ref: str, offset: int = 0, length: int = 
 def extract(image: str, part: int | None, ref: str, out_dir: str, stream: str | None = None, name: str | None = None) -> dict:
     h = handle(image)
     f = h.open(part, ref)
-    base = name or (Path(ref).name if ref.startswith("/") else f"inode{f.info.meta.addr if f.info.meta else 0}")
+    inode = f.info.meta.addr if f.info.meta else 0
+    base = safe_name(name or ref, f"inode{inode}") if (name or ref.startswith("/")) else f"inode{inode}"
     if stream:
-        base += "~" + stream
-    dest = Path(out_dir).expanduser() / base
+        base += "~" + safe_name(stream)
+    dest = check_out_dir(out_dir) / base
     r = h.extract(part, ref, dest, stream)
-    return {"data": r, "evidence": h.evidence(part, source=ref, inode=f.info.meta.addr if f.info.meta else None, stream=stream, tool="pytsk3 read_random")}
+    return {"data": r, "evidence": h.evidence(part, source=ref, inode=inode, stream=stream, tool="pytsk3 read_random")}
 
 
 # ---- body file (fls -m format) cache: basis for find and timeline --------------------------------------
 def _walk_body(h: ImageHandle, part: int | None, out) -> int:
-    """Pure-Python recursive walk producing fls -m style lines (allocated and deleted names)."""
+    """Pure-Python recursive walk producing fls -m style lines (allocated and deleted names, orphans)."""
     fs = h.fs(part)
     seen, n = set(), 0
     stack = [("/", fs.open_dir(path="/"))]
@@ -112,7 +113,7 @@ def _walk_body(h: ImageHandle, part: int | None, out) -> int:
             nm = e.info.name
             if nm is None or nm.name in (b".", b".."):
                 continue
-            name = nm.name.decode(errors="replace")
+            name = nm.name.decode(errors="replace").replace("|", "_").replace("\n", " ")
             full = (prefix + name) if prefix.endswith("/") else prefix + "/" + name
             m = e.info.meta
             deleted = bool(int(nm.flags) & int(pytsk3.TSK_FS_NAME_FLAG_UNALLOC))
@@ -127,25 +128,23 @@ def _walk_body(h: ImageHandle, part: int | None, out) -> int:
             if not deleted and not (int(m.flags) & int(pytsk3.TSK_FS_META_FLAG_ALLOC)):
                 deleted = True
             is_dir = int(m.type) == int(pytsk3.TSK_FS_META_TYPE_DIR)
-            inode = f"{m.addr}"
             if is_dir and not deleted and m.addr in seen:
                 continue
-            out.write(f"0|{full}{'/' if is_dir else ''}{' (deleted)' if deleted else ''}|{inode}|{'d' if is_dir else 'r'}/{'d' if is_dir else 'r'}rwxrwxrwx|{m.uid}|{m.gid}|{m.size}|{m.atime or 0}|{m.mtime or 0}|{m.ctime or 0}|{m.crtime or 0}\n")
+            out.write(f"0|{full}{'/' if is_dir else ''}{' (deleted)' if deleted else ''}|{m.addr}|{'d' if is_dir else 'r'}/{'d' if is_dir else 'r'}rwxrwxrwx|{m.uid}|{m.gid}|{m.size}|{m.atime or 0}|{m.mtime or 0}|{m.ctime or 0}|{m.crtime or 0}\n")
             n += 1
-            if is_dir and not deleted and m.addr not in seen and name not in ("$OrphanFiles",):
+            if is_dir and not deleted and m.addr not in seen and name != "$OrphanFiles":
                 seen.add(m.addr)
                 try:
                     stack.append((full, fs.open_dir(inode=m.addr)))
                 except OSError:
                     pass
-    # orphan files (deleted entries without a parent) if the file system exposes them
-    try:
-        od = fs.open_dir(path="/$OrphanFiles")
-        for e in od:
+    try:  # orphan files (deleted entries without a parent) when the file system exposes them
+        for e in fs.open_dir(path="/$OrphanFiles"):
             m = e.info.meta
             if m is None or e.info.name.name in (b".", b".."):
                 continue
-            out.write(f"0|/$OrphanFiles/{e.info.name.name.decode(errors='replace')} (deleted)|{m.addr}|r/rrwxrwxrwx|{m.uid}|{m.gid}|{m.size}|{m.atime or 0}|{m.mtime or 0}|{m.ctime or 0}|{m.crtime or 0}\n"); n += 1
+            nm = e.info.name.name.decode(errors="replace").replace("|", "_")
+            out.write(f"0|/$OrphanFiles/{nm} (deleted)|{m.addr}|r/rrwxrwxrwx|{m.uid}|{m.gid}|{m.size}|{m.atime or 0}|{m.mtime or 0}|{m.ctime or 0}|{m.crtime or 0}\n"); n += 1
     except OSError:
         pass
     return n
@@ -154,14 +153,17 @@ def _walk_body(h: ImageHandle, part: int | None, out) -> int:
 def body_path(h: ImageHandle, part: int | None) -> Path:
     part = part if part is not None else h.default_part()
     p = config.cache_dir(h.name) / f"p{part}.body"
-    if not p.exists() or p.stat().st_size == 0:
-        fls = find_tool("fls")
-        if fls:
-            with open(p, "wb") as out:
-                subprocess.run([fls, "-r", "-m", "/", "-o", str(h.part_offset_sectors(part)), h.path], stdout=out, stderr=subprocess.DEVNULL, timeout=3600)
-        if not fls or p.stat().st_size == 0:
-            with open(p, "w", encoding="utf-8", errors="replace") as out:
-                _walk_body(h, part, out)
+    with h.lock:
+        if not p.exists() or p.stat().st_size == 0:
+            tmp = p.with_suffix(".body.tmp")
+            fls = find_tool("fls")
+            if fls:
+                with open(tmp, "wb") as out:
+                    subprocess.run([fls, "-r", "-m", "/", "-o", str(h.part_offset_sectors(part)), h.path], stdout=out, stderr=subprocess.DEVNULL, timeout=3600)
+            if not fls or tmp.stat().st_size == 0:
+                with open(tmp, "w", encoding="utf-8", errors="replace") as out:
+                    _walk_body(h, part, out)
+            tmp.replace(p)
     return p
 
 
@@ -192,16 +194,19 @@ def _parse_time(s: str | None, h: ImageHandle) -> int | None:
     return int(dt.timestamp())
 
 
+def _name_regex(pattern: str, regex: bool) -> re.Pattern:
+    if regex:
+        return re.compile(pattern, re.I)
+    if "*" in pattern or "?" in pattern:
+        return re.compile("^" + re.escape(pattern).replace(r"\*", ".*").replace(r"\?", ".") + "$", re.I)
+    return re.compile(re.escape(pattern), re.I)
+
+
 def find(image: str, part: int | None, pattern: str, regex: bool = False, deleted: str = "any", min_size: int = 0, max_size: int | None = None,
          mtime_from: str | None = None, mtime_to: str | None = None, limit: int = 500, include_filename_attr: bool = False) -> dict:
     """pattern matches the full path (case-insensitive); glob by default (* ? allowed)."""
     h = handle(image)
-    if regex:
-        rx = re.compile(pattern, re.I)
-    elif "*" in pattern or "?" in pattern:
-        rx = re.compile("^" + re.escape(pattern).replace(r"\*", ".*").replace(r"\?", ".") + "$", re.I)
-    else:
-        rx = re.compile(re.escape(pattern), re.I)
+    rx = _name_regex(pattern, regex)
     t0, t1 = _parse_time(mtime_from, h), _parse_time(mtime_to, h)
     rows, n = [], 0
     for d in iter_body(h, part):
@@ -209,13 +214,11 @@ def find(image: str, part: int | None, pattern: str, regex: bool = False, delete
             continue
         if not rx.search(d["name"]):
             continue
-        if deleted == "only" and not d["deleted"]:
-            continue
-        if deleted == "no" and d["deleted"]:
+        if (deleted == "only" and not d["deleted"]) or (deleted == "no" and d["deleted"]):
             continue
         if d["size"] < min_size or (max_size is not None and d["size"] > max_size):
             continue
-        if t0 and d["mtime"] < t0 or t1 and d["mtime"] > t1:
+        if (t0 and d["mtime"] < t0) or (t1 and d["mtime"] > t1):
             continue
         n += 1
         if n <= limit:
@@ -231,6 +234,7 @@ def timeline(image: str, part: int | None, start: str | None = None, end: str | 
     h = handle(image)
     t0, t1 = _parse_time(start, h), _parse_time(end, h)
     rx = re.compile(path_regex, re.I) if path_regex else None
+    kinds = "".join(k for k in kinds.lower() if k in "macb") or "mcb"
     events = []
     for d in iter_body(h, part):
         if d["name"].endswith("($FILE_NAME)") or (rx and not rx.search(d["name"])):
@@ -250,10 +254,10 @@ def timeline(image: str, part: int | None, start: str | None = None, end: str | 
             "limitations": ["$STANDARD_INFORMATION times only (NTFS $FILE_NAME times via stat); body-file times are second precision"]}
 
 
-def recover_deleted(image: str, part: int | None, out_dir: str, path_regex: str | None = None, progress=None) -> dict:
+def recover_deleted(image: str, part: int | None, out_dir: str, path_regex: str | None = None, max_files: int = 20000, progress=None) -> dict:
     """Recover deleted files (names still present in the tree or orphaned) into out_dir. Uses tsk_recover when installed, else pure Python."""
-    h = handle(image)
-    dest = Path(out_dir).expanduser(); dest.mkdir(parents=True, exist_ok=True)
+    h = private_handle(image)
+    dest = check_out_dir(out_dir)
     rx = re.compile(path_regex, re.I) if path_regex else None
     if find_tool("tsk_recover"):
         r = run(["tsk_recover", "-e", "-o", str(h.part_offset_sectors(part)), h.path, str(dest)], timeout=7200)
@@ -268,6 +272,8 @@ def recover_deleted(image: str, part: int | None, out_dir: str, path_regex: str 
                 "evidence": h.evidence(part, tool="tsk_recover -e")}
     fs = h.fs(part); kept, errors, seen = 0, 0, set()
     for d in iter_body(h, part):
+        if kept >= max_files:
+            break
         if not d["deleted"] or d["size"] <= 0 or d["name"].endswith("($FILE_NAME)") or (rx and not rx.search(d["name"])):
             continue
         inode = int(d["inode"].split("-")[0])
@@ -278,20 +284,15 @@ def recover_deleted(image: str, part: int | None, out_dir: str, path_regex: str 
             f = fs.open_meta(inode=inode)
             if f.info.meta is None or int(f.info.meta.type) == int(pytsk3.TSK_FS_META_TYPE_DIR):
                 continue
-            rel = d["name"].lstrip("/").replace(":", "_")
-            target = dest / rel
+            target = dest / safe_relpath(d["name"])
             target.parent.mkdir(parents=True, exist_ok=True)
             with open(target, "wb") as out:
-                off, total = 0, f.info.meta.size
-                while off < total:
-                    chunk = h.read_attr(f, None, off, min(8 << 20, total - off))
-                    if not chunk:
-                        break
-                    out.write(chunk); off += len(chunk)
+                for chunk in h.iter_content(f):
+                    out.write(chunk)
             kept += 1
             if progress and kept % 100 == 0:
                 progress(f"{kept} files recovered")
         except Exception:
             errors += 1
-    return {"data": {"out_dir": str(dest), "files": kept, "errors": errors}, "evidence": h.evidence(part, tool="pytsk3 deleted-entry walk"),
+    return {"data": {"out_dir": str(dest), "files": kept, "errors": errors, "truncated": kept >= max_files}, "evidence": h.evidence(part, tool="pytsk3 deleted-entry walk"),
             "limitations": ["deleted files whose clusters were reused come back with foreign content; verify by type/hash", "only entries that still have a name (incl. orphans) are recovered; carve unallocated space for the rest"]}

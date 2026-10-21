@@ -66,6 +66,16 @@ Windows: install sleuthkit from the release zip and add its `bin` folder to `too
 - Cache: `~/.fea/cache/<image>/` holds the body file (directory walk) and files extracted for parsing, named by inode. Delete it freely; it is rebuilt on demand.
 - Default timezone: `fea images tz <IANA name>`; per image with `--tz` on `fea images add`. `FEA_TZ` overrides at run time.
 
+## Host access policy
+
+The MCP server only opens registered images (or paths under `allowed_roots`), only reads `local_path` files inside the cache/output area, and only writes under the output root. Configure once:
+
+```bash
+uv run fea images settings --allowed-root /cases --output-root /cases/out --show
+```
+
+The CLI itself runs without the policy (it is the examiner at the keyboard). See SECURITY.md.
+
 ## Verify
 
 ```bash

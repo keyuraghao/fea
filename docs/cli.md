@@ -14,7 +14,9 @@ Paths inside an image start with `/` regardless of the host OS. A file can also 
 | `fea images add NAME PATH [--label L] [--tz ZONE]` | register an image (first segment of a split image) |
 | `fea images remove NAME` | forget an image |
 | `fea images tz ZONE` | set the default reporting timezone |
-| `fea mcp [--transport stdio\|sse\|streamable-http]` | run the MCP server |
+| `fea mcp [--transport stdio\|sse\|streamable-http]` | run the MCP server (under the host access policy) |
+| `fea images settings [--allowed-root DIR ...] [--output-root DIR] [--show]` | host access policy for the MCP server |
+| `fea version` | print the version |
 
 ## File system
 
@@ -56,11 +58,11 @@ Each takes `IMAGE REF` or `--local FILE` for a file already on disk.
 ## Examples
 
 ```bash
-fea find E4 '*.evtx'
-fea evtx E4 /Windows/System32/winevt/Logs/Security.evtx --ids 4624,4625 --start 2021-02-03 --contains consent
-fea reg E4 /Windows/System32/config/SOFTWARE --key 'Microsoft\Windows NT\CurrentVersion' --depth 0
-fea regplugins E4 /Users/jean/NTUSER.DAT --plugin user_assist --plugin word_wheel_query
-fea grep E4 'LEAVE IT HERE' FROGMAN --unallocated --max-hits 20
-fea strings E4 /pagefile.sys --pattern 'https?://' --limit 100
-fea sqlite E5 '/Users/julia/AppData/Local/Microsoft/Edge/User Data/Default/History' --sql 'select url,title,last_visit_time from urls order by last_visit_time desc'
+fea find WS1 '*.evtx'
+fea evtx WS1 /Windows/System32/winevt/Logs/Security.evtx --ids 4624,4625 --start 2021-02-03 --contains consent
+fea reg WS1 /Windows/System32/config/SOFTWARE --key 'Microsoft\Windows NT\CurrentVersion' --depth 0
+fea regplugins WS1 /Users/<user>/NTUSER.DAT --plugin user_assist --plugin word_wheel_query
+fea grep WS1 'drop point' CODEWORD --unallocated --max-hits 20
+fea strings WS1 /pagefile.sys --pattern 'https?://' --limit 100
+fea sqlite WS2 '/Users/<user>/AppData/Local/Microsoft/Edge/User Data/Default/History' --sql 'select url,title,last_visit_time from urls order by last_visit_time desc'
 ```

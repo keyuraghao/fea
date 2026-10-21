@@ -306,5 +306,31 @@ for _name, _fn, _help in (("lnk", artifacts.lnk, "Parse a .lnk shortcut."), ("pr
     cli.command(name=_name, help=_help)(_make(_fn))
 
 
+@cli.command()
+def version():
+    """Print the FEA version."""
+    from . import __version__
+    click.echo(__version__)
+
+
+@images.command("settings")
+@click.option("--allowed-root", "roots", multiple=True, help="directory under which images / local files may be opened by the MCP server (repeatable)")
+@click.option("--output-root", default=None, help="directory under which extract/recover_deleted may write")
+@click.option("--show", is_flag=True)
+def images_settings(roots, output_root, show):
+    """Set the host access policy used by the MCP server (allowed_roots, output_root)."""
+    from .paths import policy_report
+    if roots:
+        config.set_setting("allowed_roots", [str(__import__("pathlib").Path(r).expanduser().resolve()) for r in roots])
+    if output_root:
+        config.set_setting("output_root", str(__import__("pathlib").Path(output_root).expanduser().resolve()))
+    click.echo(json.dumps(policy_report(), indent=2))
+
+
 def main():
+    import os
+    import sys
+    # The CLI is run by the examiner on the host: no access policy. The MCP server (driven by an agent) keeps it.
+    if "mcp" not in sys.argv[1:2]:
+        os.environ.setdefault("FEA_UNRESTRICTED", "1")
     cli()

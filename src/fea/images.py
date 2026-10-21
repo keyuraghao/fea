@@ -1,9 +1,10 @@
-"""Open images and file systems with The Sleuth Kit (pytsk3); resolve paths and inodes; time helpers."""
+"""Open images and file systems with The Sleuth Kit (pytsk3); resolve paths and inodes; time helpers; evidence blocks."""
 from __future__ import annotations
 
 import hashlib
 import re
 import subprocess
+import threading
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -12,13 +13,17 @@ from zoneinfo import ZoneInfo
 import pytsk3
 
 from . import config
+from .paths import safe_name
 
 SECTOR = 512
 META_TYPES = {0: "undef", 1: "file", 2: "dir", 3: "fifo", 4: "chr", 5: "blk", 6: "lnk", 7: "shad", 8: "sock", 9: "wht", 10: "virt", 11: "virt_dir"}
 _INODE_RE = re.compile(r"^(?:inode:)?(\d+)(?:-(\d+)(?:-(\d+))?)?$")
+FILETIME_EPOCH = 116444736000000000
 
 
 class ImageHandle:
+    """One opened image. pytsk3 objects are not thread-safe: background jobs must use `private_handle`, not the shared cached one."""
+
     def __init__(self, name: str):
         self.meta = config.get_image(name)
         self.name = self.meta["name"]
@@ -27,9 +32,13 @@ class ImageHandle:
         self.img = pytsk3.Img_Info(self.path)
         self.size = self.img.get_size()
         self._fs: dict[int, pytsk3.FS_Info] = {}
+        self._parts: list[dict] | None = None
+        self.lock = threading.RLock()
 
     # ---- partitions -------------------------------------------------------
     def partitions(self) -> list[dict]:
+        if self._parts is not None:
+            return self._parts
         out = []
         try:
             vol = pytsk3.Volume_Info(self.img)
@@ -46,8 +55,10 @@ class ImageHandle:
                     p["fs_type"] = str(fs.info.ftype).replace("TSK_FS_TYPE_", "")
                     p["block_size"] = fs.info.block_size
                     p["block_count"] = fs.info.block_count
+                    self._fs.setdefault(p["addr"], fs)
                 except OSError as e:
                     p["fs_type"] = None; p["fs_error"] = str(e).splitlines()[0]
+        self._parts = out
         return out
 
     def default_part(self) -> int:
@@ -94,6 +105,16 @@ class ImageHandle:
             return f.read_random(offset, size, attr.info.type, attr.info.id)
         return f.read_random(offset, size)
 
+    def iter_content(self, f: pytsk3.File, attr=None, chunk: int = 8 << 20):
+        total = attr.info.size if attr is not None else (f.info.meta.size if f.info.meta else 0)
+        off = 0
+        while off < total:
+            data = self.read_attr(f, attr, off, min(chunk, total - off))
+            if not data:
+                break
+            yield data
+            off += len(data)
+
     def data_attrs(self, f: pytsk3.File) -> list:
         """All $DATA-like attributes (NTFS main stream + ADS); for other FS the default stream."""
         out = []
@@ -106,33 +127,32 @@ class ImageHandle:
             pass
         return out
 
+    def find_stream(self, f: pytsk3.File, stream: str | None):
+        if not stream:
+            return None
+        for a in self.data_attrs(f):
+            if (a.info.name or b"").decode(errors="replace") == stream:
+                return a
+        raise FileNotFoundError(f"stream '{stream}' not found")
+
     def extract(self, part: int | None, ref: str, dest: Path, stream: str | None = None) -> dict:
         f = self.open(part, ref)
-        attr = None
-        if stream:
-            for a in self.data_attrs(f):
-                if (a.info.name or b"").decode(errors="replace") == stream:
-                    attr = a
-            if attr is None:
-                raise FileNotFoundError(f"stream '{stream}' not found")
+        attr = self.find_stream(f, stream)
         dest.parent.mkdir(parents=True, exist_ok=True)
         h1, h5 = hashlib.sha1(), hashlib.md5()
-        total = attr.info.size if attr is not None else (f.info.meta.size if f.info.meta else 0)
+        n = 0
         with open(dest, "wb") as out:
-            off = 0
-            while off < total:
-                chunk = self.read_attr(f, attr, off, min(8 << 20, total - off))
-                if not chunk:
-                    break
-                out.write(chunk); h1.update(chunk); h5.update(chunk); off += len(chunk)
-        return {"local_path": str(dest), "size": off, "sha1": h1.hexdigest(), "md5": h5.hexdigest()}
+            for chunk in self.iter_content(f, attr):
+                out.write(chunk); h1.update(chunk); h5.update(chunk); n += len(chunk)
+        return {"local_path": str(dest), "size": n, "sha1": h1.hexdigest(), "md5": h5.hexdigest()}
 
     def cached_copy(self, part: int | None, ref: str, stream: str | None = None) -> tuple[Path, dict]:
-        """Extract once into the cache (keyed by inode) and reuse."""
+        """Extract once into the cache (keyed by partition + inode) and reuse."""
         f = self.open(part, ref)
         inode = f.info.meta.addr if f.info.meta else 0
-        base = Path(ref).name if not _INODE_RE.match(ref) else f"inode{inode}"
-        dest = config.cache_dir(self.name) / f"p{part if part is not None else self.default_part()}" / f"{inode}_{base}{('~' + stream) if stream else ''}"
+        base = safe_name(ref, f"inode{inode}") if not _INODE_RE.match(ref) else f"inode{inode}"
+        pdir = config.cache_dir(self.name) / f"p{part if part is not None else self.default_part()}"
+        dest = pdir / f"{inode}_{base}{('~' + safe_name(stream)) if stream else ''}"
         if dest.exists():
             return dest, {"local_path": str(dest), "size": dest.stat().st_size, "sha1": sha1_file(dest), "cached": True}
         return dest, self.extract(part, ref, dest, stream)
@@ -141,7 +161,10 @@ class ImageHandle:
     def ts(self, epoch: int | None, nano: int = 0) -> dict | None:
         if not epoch:
             return None
-        dt = datetime.fromtimestamp(epoch, tz=timezone.utc).replace(microsecond=min(nano // 1000, 999999))
+        try:
+            dt = datetime.fromtimestamp(epoch, tz=timezone.utc).replace(microsecond=min(nano // 1000, 999999))
+        except (OverflowError, OSError, ValueError):
+            return {"utc": None, "local": None, "raw_epoch": epoch}
         return {"utc": dt.isoformat(), "local": dt.astimezone(self.tz).strftime("%Y-%m-%d %H:%M:%S.%f %Z")}
 
     def evidence(self, part: int | None = None, **extra) -> dict:
@@ -152,12 +175,18 @@ class ImageHandle:
                 ev["fs_offset_sectors"] = self.part_offset_sectors(ev["partition"])
             except Exception:
                 pass
-        ev.update(extra)
+        ev.update({k: v for k, v in extra.items() if v is not None})
         return ev
 
 
 @lru_cache(maxsize=16)
 def handle(name: str) -> ImageHandle:
+    """Shared handle for foreground calls."""
+    return ImageHandle(name)
+
+
+def private_handle(name: str) -> ImageHandle:
+    """A fresh handle for a background job (pytsk3 is not thread-safe)."""
     return ImageHandle(name)
 
 
@@ -195,16 +224,13 @@ def run(cmd: list[str], timeout: int = 600) -> subprocess.CompletedProcess:
     return subprocess.run([exe] + cmd[1:], capture_output=True, timeout=timeout)
 
 
-FILETIME_EPOCH = 116444736000000000
-
-
 def filetime(v: int):
-    if not v:
+    if not v or v < FILETIME_EPOCH:
         return None
     return (v - FILETIME_EPOCH) // 10_000_000, ((v - FILETIME_EPOCH) % 10_000_000) * 100
 
 
-def ntfs_filename_times(h: "ImageHandle", f: pytsk3.File) -> dict | None:
+def ntfs_filename_times(h: ImageHandle, f: pytsk3.File) -> dict | None:
     """$FILE_NAME attribute times (NTFS), parsed from the raw attribute: harder to timestomp than $STANDARD_INFORMATION."""
     try:
         for a in f:

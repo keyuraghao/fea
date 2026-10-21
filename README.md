@@ -39,15 +39,15 @@ Linux and Android file systems are handled by the same file-system tools; Androi
 git clone https://github.com/keyuraghao/fea && cd fea
 uv sync                                   # or: pip install -e .
 uv run fea setup                          # registers the MCP server with Claude Code and installs the /fea skill
-uv run fea images add E4 /cases/x/disk.001 --label "Workstation of J. Hassan"
+uv run fea images add WS1 /cases/x/workstation.001 --label "Workstation 1"
 ```
 
-Then ask Claude Code something like *"on E4, who cleared the Security log and what ran in the ten minutes before?"* and it will call the FEA tools itself. From the shell the same operations are one command each:
+Then ask Claude Code something like *"on WS1, who cleared the Security log and what ran in the ten minutes before?"* and it will call the FEA tools itself. From the shell the same operations are one command each:
 
 ```bash
-fea evtx E4 /Windows/System32/winevt/Logs/Security.evtx --ids 1102
-fea timeline E4 --start 2021-02-03T12:24 --end 2021-02-03T12:34 --path Prefetch
-fea prefetch E4 /Windows/Prefetch/UPDATE2.EXE-7783C67A.pf
+fea evtx WS1 /Windows/System32/winevt/Logs/Security.evtx --ids 1102
+fea timeline WS1 --start 2021-02-03T12:24 --end 2021-02-03T12:34 --path Prefetch
+fea prefetch WS1 /Windows/Prefetch/UPDATER.EXE-1A2B3C4D.pf
 ```
 
 Requirements: Python 3.12+ on Windows, macOS or Linux. Nothing else. The Sleuth Kit and exiftool binaries are optional accelerators and are used automatically when found (`fea doctor` shows what was detected).
@@ -65,11 +65,11 @@ Long scans run as background jobs (`job_result(job_id, wait_s=30)`), so the agen
 
 ## Showcase
 
-Findings reproduced with FEA on a ten-image training case (a government leak investigation):
+Findings reproduced with FEA on a ten-image training case (a staged government leak):
 
-- **Who cleared the logs.** `evtx` on `Security.evtx` returned the single surviving record: event 1102, log cleared by the local account `jean` at 12:34:08 local time; `timeline` on the Prefetch folder showed the implant runs in the preceding minutes; `prefetch` gave the five run times of `update2.exe`.
-- **What the implant talked to.** `grep_file` on the implant found `tcp://192.168.2.42:5555` stored as UTF-16LE at offset 205,372.
-- **What the user was told to do.** `sqlite_query` on the Sticky Notes database, with its write-ahead log applied, returned the note "install new software with the .\jean" that explains the passwordless local account.
+- **Who cleared the logs.** `evtx` on `Security.evtx` returned the single surviving record: event 1102, log cleared by a passwordless local account at 12:34:08 local time; `timeline` on the Prefetch folder showed the implant runs in the preceding minutes; `prefetch` gave the five run times of the second-stage binary.
+- **What the implant talked to.** `grep_file` on the implant found its command-and-control URL stored as UTF-16LE, with the exact file offset.
+- **What the user had been told to do.** `sqlite_query` on the Sticky Notes database, with its write-ahead log applied, returned a note instructing the user to install software with the local account, which explained why that account had no password.
 - **Hidden appended data.** `file_info` on every picture reported `bytes_after_eof: 0`, closing a steganography question in one call per file.
 
 ## Agent integration
@@ -90,6 +90,10 @@ The server speaks stdio by default (`--transport sse|streamable-http` also avail
 - [Targets](docs/targets.md): per-artefact guides and the Windows/Linux/Android checklists
 - [Evidence contract](docs/evidence.md): what the `evidence` and `limitations` blocks promise
 - [Contributing](CONTRIBUTING.md), [Security and evidence handling](SECURITY.md), [Changelog](CHANGELOG.md)
+
+## Host access policy
+
+An agent reading evidence may be fed planted instructions. FEA therefore restricts what the MCP server can touch on the host: images come from the registry or `allowed_roots`, `local_path` arguments must be inside the cache or output area, and `extract` / `recover_deleted` write only under the output root (`~/.fea/out` by default). Names taken from image content are sanitised before they reach the host file system. Details in [SECURITY.md](SECURITY.md); `tools_status` shows the policy in force.
 
 ## Limits
 
